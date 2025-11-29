@@ -135,7 +135,7 @@ def create_directories():
     ]
     for dir_path in dirs:
         dir_path.mkdir(parents=True, exist_ok=True)
-    print("✓ All directories created successfully.")
+    print("[+] All directories created successfully.")
 
 
 if __name__ == "__main__":

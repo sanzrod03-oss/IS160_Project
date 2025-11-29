@@ -28,7 +28,7 @@ def set_seed(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-    print(f"✓ Random seed set to {seed}")
+    print(f"[+] Random seed set to {seed}")
 
 
 def get_device():
@@ -40,13 +40,13 @@ def get_device():
     """
     if torch.cuda.is_available():
         device = torch.device("cuda")
-        print(f"✓ Using CUDA: {torch.cuda.get_device_name(0)}")
+        print(f"[+] Using CUDA: {torch.cuda.get_device_name(0)}")
     elif torch.backends.mps.is_available():
         device = torch.device("mps")
-        print("✓ Using Apple Silicon MPS")
+        print("[+] Using Apple Silicon MPS")
     else:
         device = torch.device("cpu")
-        print("✓ Using CPU")
+        print("[+] Using CPU")
     return device
 
 
@@ -70,9 +70,10 @@ def save_checkpoint(
     loss: float,
     accuracy: float,
     filepath: Path,
+    scheduler: torch.optim.lr_scheduler._LRScheduler = None,
 ):
     """
-    Save model checkpoint.
+    Save model checkpoint with full training state.
     
     Args:
         model: PyTorch model
@@ -81,16 +82,18 @@ def save_checkpoint(
         loss: Current loss
         accuracy: Current accuracy
         filepath: Path to save checkpoint
+        scheduler: Optional learning rate scheduler
     """
     checkpoint = {
         "epoch": epoch,
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
         "loss": loss,
         "accuracy": accuracy,
     }
     torch.save(checkpoint, filepath)
-    print(f"✓ Checkpoint saved to {filepath}")
+    # Don't print save message for every checkpoint (too verbose)
 
 
 def load_checkpoint(
@@ -98,15 +101,17 @@ def load_checkpoint(
     optimizer: torch.optim.Optimizer,
     filepath: Path,
     device: torch.device,
+    scheduler: torch.optim.lr_scheduler._LRScheduler = None,
 ) -> Tuple[torch.nn.Module, torch.optim.Optimizer, int, float]:
     """
-    Load model checkpoint.
+    Load model checkpoint with full training state.
     
     Args:
         model: PyTorch model
         optimizer: Optimizer
         filepath: Path to checkpoint
         device: Device to load model to
+        scheduler: Optional learning rate scheduler
         
     Returns:
         Tuple of (model, optimizer, epoch, loss)
@@ -114,10 +119,17 @@ def load_checkpoint(
     checkpoint = torch.load(filepath, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    
+    if scheduler and "scheduler_state_dict" in checkpoint and checkpoint["scheduler_state_dict"]:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    
     epoch = checkpoint["epoch"]
     loss = checkpoint["loss"]
-    print(f"✓ Checkpoint loaded from {filepath}")
-    print(f"  Resuming from epoch {epoch}, loss: {loss:.4f}")
+    accuracy = checkpoint.get("accuracy", 0.0)
+    
+    print(f"[+] Checkpoint loaded from {filepath}")
+    print(f"  Epoch: {epoch}, Loss: {loss:.4f}, Accuracy: {accuracy:.4f}")
+    
     return model, optimizer, epoch, loss
 
 
@@ -156,7 +168,7 @@ def plot_training_history(
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Training history plot saved to {save_path}")
+        print(f"[+] Training history plot saved to {save_path}")
     
     plt.show()
 
@@ -200,7 +212,7 @@ def plot_confusion_matrix(
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"✓ Confusion matrix saved to {save_path}")
+        print(f"[+] Confusion matrix saved to {save_path}")
     
     plt.show()
 
@@ -215,7 +227,7 @@ def save_metrics(metrics: Dict, filepath: Path):
     """
     with open(filepath, 'w') as f:
         json.dump(metrics, f, indent=4)
-    print(f"✓ Metrics saved to {filepath}")
+    print(f"[+] Metrics saved to {filepath}")
 
 
 def load_metrics(filepath: Path) -> Dict:

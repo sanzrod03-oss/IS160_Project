@@ -28,7 +28,7 @@ def get_dataset_structure(data_dir: Path) -> Dict[str, List[str]]:
     dataset_structure = defaultdict(list)
     
     if not data_dir.exists():
-        print(f"⚠ Warning: Data directory not found: {data_dir}")
+        print(f"[!] Warning: Data directory not found: {data_dir}")
         print("Please download the Plant Disease dataset and place it in data/raw/")
         return dataset_structure
     
@@ -105,7 +105,7 @@ def filter_fresno_crops(
             dest_dir = processed_data_dir / class_name
             
             if dest_dir.exists():
-                print(f"  ⚠ {class_name} already exists, skipping...")
+                print(f"  [!] {class_name} already exists, skipping...")
                 continue
             
             # Count images
@@ -114,14 +114,14 @@ def filter_fresno_crops(
             
             if num_images > 0:
                 shutil.copytree(class_dir, dest_dir)
-                print(f"  ✓ Copied {class_name}: {num_images} images")
+                print(f"  [+] Copied {class_name}: {num_images} images")
                 
                 stats['total_classes'] += 1
                 stats['total_images'] += num_images
                 stats['classes_per_crop'][crop_match] += 1
                 stats['images_per_crop'][crop_match] += num_images
         else:
-            print(f"  ✗ Excluded {class_name} (not in Fresno crops)")
+            print(f"  [-] Excluded {class_name} (not in Fresno crops)")
     
     print("\n" + "="*60)
     print("FILTERING COMPLETE")
@@ -238,10 +238,12 @@ def main(args):
     
     # Get dataset structure
     print("Analyzing raw dataset structure...")
-    dataset_structure = get_dataset_structure(config.RAW_DATA_DIR)
+    # Use the actual location of the dataset
+    raw_data_path = config.RAW_DATA_DIR / "New Plant Diseases Dataset(Augmented)" / "New Plant Diseases Dataset(Augmented)" / "train"
+    dataset_structure = get_dataset_structure(raw_data_path)
     
     if not dataset_structure:
-        print("\n⚠ ERROR: No data found in raw directory.")
+        print("\n[!] ERROR: No data found in raw directory.")
         print(f"Please download the dataset and extract it to: {config.RAW_DATA_DIR}")
         return
     
@@ -251,17 +253,17 @@ def main(args):
     
     # Filter for Fresno crops
     if args.skip_filter:
-        print("\n⚠ Skipping filtering step (--skip-filter flag set)")
+        print("\n[!] Skipping filtering step (--skip-filter flag set)")
     else:
         stats = filter_fresno_crops(
-            config.RAW_DATA_DIR,
+            raw_data_path,
             config.PROCESSED_DATA_DIR,
             config.FRESNO_CROPS,
         )
     
     # Split dataset
     if args.skip_split:
-        print("\n⚠ Skipping split step (--skip-split flag set)")
+        print("\n[!] Skipping split step (--skip-split flag set)")
     else:
         split_stats = split_dataset(
             config.PROCESSED_DATA_DIR,
@@ -271,7 +273,7 @@ def main(args):
             seed=config.RANDOM_SEED,
         )
     
-    print("\n✓ Data preparation complete!")
+    print("\n[+] Data preparation complete!")
     print(f"  Processed data: {config.PROCESSED_DATA_DIR}")
     print(f"  Train data: {config.PROCESSED_DATA_DIR.parent / 'train'}")
     print(f"  Val data: {config.PROCESSED_DATA_DIR.parent / 'val'}")

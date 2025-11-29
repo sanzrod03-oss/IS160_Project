@@ -124,7 +124,7 @@ def get_dataloaders(batch_size=32, num_workers=4):
     num_classes = len(train_dataset.classes)
     class_names = train_dataset.classes
     
-    print(f"\n✓ Data loaders created:")
+    print(f"\n[+] Data loaders created:")
     print(f"  Train: {len(train_dataset)} images, {len(train_loader)} batches")
     print(f"  Val: {len(val_dataset)} images, {len(val_loader)} batches")
     print(f"  Test: {len(test_dataset)} images, {len(test_loader)} batches")
@@ -145,7 +145,7 @@ def get_model(architecture='resnet34', num_classes=38, pretrained=True):
     Returns:
         PyTorch model
     """
-    print(f"\n✓ Creating model: {architecture}")
+    print(f"\n[+] Creating model: {architecture}")
     print(f"  Pretrained: {pretrained}")
     print(f"  Number of classes: {num_classes}")
     
@@ -269,9 +269,114 @@ def validate(model, val_loader, criterion, device, epoch):
     return losses.avg, accuracies.avg
 
 
+def load_latest_checkpoint(args, model, optimizer, device):
+    """
+    Load the latest checkpoint if it exists for continuous learning.
+    
+    Args:
+        args: Command line arguments
+        model: PyTorch model
+        optimizer: Optimizer
+        device: Device to load checkpoint to
+        
+    Returns:
+        Tuple of (start_epoch, best_val_acc, history)
+    """
+    from utils import load_checkpoint
+    import json
+    
+    # Check for resume checkpoint
+    checkpoint_path = config.CHECKPOINTS_DIR / f"{args.architecture}_latest.pth"
+    history_path = config.CHECKPOINTS_DIR / f"{args.architecture}_history.json"
+    
+    if args.resume and checkpoint_path.exists():
+        print("\n" + "="*60)
+        print("RESUMING FROM CHECKPOINT")
+        print("="*60)
+        
+        # Load checkpoint
+        model, optimizer, last_epoch, last_loss = load_checkpoint(
+            model, optimizer, checkpoint_path, device
+        )
+        
+        # Load history if exists
+        history = {
+            'train_loss': [],
+            'train_acc': [],
+            'val_loss': [],
+            'val_acc': [],
+        }
+        
+        if history_path.exists():
+            with open(history_path, 'r') as f:
+                saved_history = json.load(f)
+                history.update(saved_history)
+            print(f"[+] Loaded training history with {len(history['train_loss'])} previous epochs")
+        
+        # Get best validation accuracy from history
+        best_val_acc = max(history['val_acc']) if history['val_acc'] else 0.0
+        
+        print(f"[+] Resuming from epoch {last_epoch}")
+        print(f"[+] Best validation accuracy so far: {best_val_acc:.4f}")
+        print("="*60 + "\n")
+        
+        return last_epoch, best_val_acc, history
+    else:
+        print("\n[+] Starting training from scratch")
+        return 0, 0.0, {
+            'train_loss': [],
+            'train_acc': [],
+            'val_loss': [],
+            'val_acc': [],
+        }
+
+
+def save_training_state(model, optimizer, scheduler, epoch, val_loss, val_acc, 
+                        history, architecture, is_best=False):
+    """
+    Save complete training state including model, optimizer, scheduler, and history.
+    
+    Args:
+        model: PyTorch model
+        optimizer: Optimizer
+        scheduler: Learning rate scheduler
+        epoch: Current epoch
+        val_loss: Validation loss
+        val_acc: Validation accuracy
+        history: Training history dictionary
+        architecture: Model architecture name
+        is_best: Whether this is the best model so far
+    """
+    import json
+    
+    # Save latest checkpoint
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+        "loss": val_loss,
+        "accuracy": val_acc,
+    }
+    
+    latest_path = config.CHECKPOINTS_DIR / f"{architecture}_latest.pth"
+    torch.save(checkpoint, latest_path)
+    
+    # Save training history
+    history_path = config.CHECKPOINTS_DIR / f"{architecture}_history.json"
+    with open(history_path, 'w') as f:
+        json.dump(history, f, indent=4)
+    
+    # If best model, save separately
+    if is_best:
+        best_path = config.CHECKPOINTS_DIR / f"{architecture}_best.pth"
+        torch.save(checkpoint, best_path)
+        print(f"  [+] New best model saved! Val Acc: {val_acc:.4f}")
+
+
 def train(args):
     """
-    Main training function.
+    Main training function with continuous learning support.
     
     Args:
         args: Command line arguments
@@ -327,32 +432,40 @@ def train(args):
         gamma=args.gamma,
     )
     
+    # Load checkpoint if resuming
+    start_epoch, best_val_acc, history = load_latest_checkpoint(
+        args, model, optimizer, device
+    )
+    
+    # Restore scheduler state if resuming
+    if start_epoch > 0:
+        for _ in range(start_epoch):
+            scheduler.step()
+    
     # TensorBoard writer
     if args.use_tensorboard:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if start_epoch > 0:
+            # Use existing log directory
+            timestamp = "resumed_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_dir = config.LOGGING_CONFIG['tensorboard_dir'] / f"{args.architecture}_{timestamp}"
         writer = SummaryWriter(log_dir)
-        print(f"\n✓ TensorBoard logging to: {log_dir}")
+        print(f"\n[+] TensorBoard logging to: {log_dir}")
     
-    # Training history
-    history = {
-        'train_loss': [],
-        'train_acc': [],
-        'val_loss': [],
-        'val_acc': [],
-    }
-    
-    best_val_acc = 0.0
     patience_counter = 0
     
     print("\n" + "="*60)
     print("STARTING TRAINING")
     print("="*60)
+    print(f"Training from epoch {start_epoch + 1} to {args.epochs}")
+    print(f"Best validation accuracy: {best_val_acc:.4f}")
+    print("="*60 + "\n")
     
     start_time = time.time()
     
     # Training loop
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch + 1, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
         print("-" * 60)
         
@@ -389,31 +502,40 @@ def train(args):
         print(f"  Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
         print(f"  LR: {optimizer.param_groups[0]['lr']:.6f}")
         
-        # Save best model
-        if val_acc > best_val_acc:
+        # Check if best model
+        is_best = val_acc > best_val_acc
+        if is_best:
             best_val_acc = val_acc
             patience_counter = 0
-            
-            checkpoint_path = config.CHECKPOINTS_DIR / f"{args.architecture}_best.pth"
-            save_checkpoint(
-                model, optimizer, epoch, val_loss, val_acc, checkpoint_path
-            )
-            print(f"  ✓ New best model saved! Val Acc: {val_acc:.4f}")
         else:
             patience_counter += 1
         
+        # Save training state (model learns and remembers)
+        save_training_state(
+            model, optimizer, scheduler, epoch, val_loss, val_acc,
+            history, args.architecture, is_best=is_best
+        )
+        print(f"  [+] Training state saved (epoch {epoch})")
+        
         # Early stopping
         if patience_counter >= args.patience:
-            print(f"\n⚠ Early stopping triggered after {epoch} epochs")
+            print(f"\n[!] Early stopping triggered after {epoch} epochs")
             print(f"  No improvement for {args.patience} epochs")
             break
         
-        # Save checkpoint at intervals
+        # Save milestone checkpoint at intervals
         if epoch % args.save_interval == 0:
-            checkpoint_path = config.CHECKPOINTS_DIR / f"{args.architecture}_epoch_{epoch}.pth"
-            save_checkpoint(
-                model, optimizer, epoch, val_loss, val_acc, checkpoint_path
-            )
+            milestone_path = config.CHECKPOINTS_DIR / f"{args.architecture}_epoch_{epoch}.pth"
+            checkpoint = {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "loss": val_loss,
+                "accuracy": val_acc,
+            }
+            torch.save(checkpoint, milestone_path)
+            print(f"  [+] Milestone checkpoint saved: epoch {epoch}")
     
     # Training complete
     training_time = time.time() - start_time
@@ -423,6 +545,7 @@ def train(args):
     print("="*60)
     print(f"Total training time: {format_time(training_time)}")
     print(f"Best validation accuracy: {best_val_acc:.4f}")
+    print(f"Total epochs trained: {len(history['train_loss'])}")
     print("="*60 + "\n")
     
     # Close TensorBoard writer
@@ -455,6 +578,12 @@ def main():
     )
     
     # Training arguments
+    parser.add_argument(
+        '--resume',
+        action='store_true',
+        default=True,
+        help='Resume training from latest checkpoint if available',
+    )
     parser.add_argument(
         '--epochs',
         type=int,
